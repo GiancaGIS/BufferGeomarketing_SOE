@@ -1,0 +1,508 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport"
+          content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <title>Filiari Bancarie</title>
+
+    <style>
+
+        html,
+        body,
+        #viewDiv {
+            padding: 0;
+            margin: 0;
+            height: 100%;
+            width: 100%;
+        }
+        #paneDiv {
+            background-color: dimgray;
+            color: white;
+            padding: 10px;
+            width: 350px;
+        }
+    </style>
+
+    <link rel="stylesheet"
+          href="https://js.arcgis.com/4.15/esri/themes/light/main.css" />
+    <script src="https://js.arcgis.com/4.15/"></script>
+
+    <script>
+        require([
+            "esri/Map",
+            "esri/layers/FeatureLayer",
+            "esri/views/MapView",
+            "esri/widgets/Legend",
+            "esri/widgets/Home",
+            "esri/tasks/IdentifyTask",
+            "esri/tasks/support/IdentifyParameters",
+            "esri/request",
+            "esri/Graphic",
+            "esri/layers/GraphicsLayer",
+            "esri/widgets/DistanceMeasurement2D",
+            "esri/widgets/AreaMeasurement2D",
+            "esri/tasks/support/FeatureSet",
+            "esri/geometry/Polygon",
+            "esri/widgets/Sketch",
+        ], function (Map, FeatureLayer, MapView, Legend, Home, IdentifyTask, IdentifyParameters, esriRequest,
+                Graphic, GraphicsLayer, DistanceMeasurement2D, AreaMeasurement2D,
+                FeatureSet, Polygon, Sketch) {
+
+                var activeWidget = null;
+
+                var mapServiceURL = "https://localhost:6443/arcgis/rest/services/TEST_SOE/Ciambelle/MapServer";
+                var fLayerClientiURL = mapServiceURL + "/0";
+                var fLayerFiliariURL = mapServiceURL + "/1";
+
+                var SOEBufferURL = "https://localhost:6443/arcgis/rest/services/TEST_SOE/Ciambelle/MapServer/exts/BufferGeomarketing/analisiGeomarketing";
+                var SOESketchURL = "https://localhost:6443/arcgis/rest/services/TEST_SOE/Ciambelle/MapServer/exts/BufferGeomarketing/analisiGeomarketingSketch";
+
+                var OID;
+                var buffer1 = 2500;
+                var buffer2 = 3500;
+                var buffer3 = 5000;
+
+                // Mi dedico a creare i PoputTemplate e Feature Layer!
+                /*************************************************************
+                 * The PopupTemplate content is the text that appears inside the
+                 * popup. {fieldName} can be used to reference the value of an
+                 * attribute of the selected feature. HTML elements can be used
+                 * to provide structure and styles within the content. The
+                 * fieldInfos property is an array of objects (each object representing
+                 * a field) that is use to format number fields and customize field
+                 * aliases in the popup and legend.
+                 **************************************************************/
+
+                var templateFiliari = {
+                    // autocasts as new PopupTemplate()
+                    title: "{NOME_BANCA}, ID: {OBJECTID}",
+                    content: [
+                        {
+                            // It is also possible to set the fieldInfos outside of the content
+                            // directly in the popupTemplate. If no fieldInfos is specifically set
+                            // in the content, it defaults to whatever may be set within the popupTemplate.
+                            type: "fields",
+                            fieldInfos: [
+                                {
+                                    fieldName: "NOME_BANCA",
+                                    label: "Nome della Filiare"
+                                },
+                                {
+                                    fieldName: "OBJECTID",
+                                    label: "Identificativo della Filiare",
+                                    format: {
+                                        digitSeparator: true,
+                                        places: 0
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                };
+
+                var templateClienti = {
+                    // autocasts as new PopupTemplate()
+                    title: "{NOME} {COGNOME}, ID: {OBJECTID}",
+                    content: [
+                        {
+                            // It is also possible to set the fieldInfos outside of the content
+                            // directly in the popupTemplate. If no fieldInfos is specifically set
+                            // in the content, it defaults to whatever may be set within the popupTemplate.
+                            type: "fields",
+                            fieldInfos: [
+                                {
+                                    fieldName: "NOME",
+                                    label: "Nome cliente"
+                                },
+                                {
+                                    fieldName: "COGNOME",
+                                    label: "Cognome cliente"
+                                },
+                                {
+                                    fieldName: "OBJECTID",
+                                    label: "Identificativo cliente",
+                                    format: {
+                                        digitSeparator: true,
+                                        places: 0
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                };
+
+                var fLayerFiliari = new FeatureLayer({
+                    url: fLayerFiliariURL,
+                    popupTemplate: templateFiliari,
+                    visible: true
+                });
+   
+
+                var fLayerClienti = new FeatureLayer({
+                    url: fLayerClientiURL,
+                    popupTemplate: templateClienti,
+                    visible: false
+                });
+
+                // GraphicsLayer for displaying results
+                var resultsLayer = new GraphicsLayer();
+
+                var graphicsLayerSkectch = new GraphicsLayer();
+
+                // Create the map
+                var map = new Map({
+                    basemap: "gray",
+                    layers: [fLayerFiliari, fLayerClienti, resultsLayer]
+                });
+
+                map.add(fLayerFiliari);
+
+                // Create the MapView
+                var view = new MapView({
+                    container: "viewDiv",
+                    map: map,
+                    center: [9.19, 45.47], // long, lat --> REGIONE LOMBARDIA
+                    zoom: 12
+                });
+
+                view.ui.add(new Legend({ view: view }), "bottom-left");
+
+                const sketch = new Sketch({
+                    layer: graphicsLayerSkectch,
+                    view: view,
+                    // graphic will be selected as soon as it is created
+                    creationMode: "update"
+                });
+
+                view.ui.add(sketch, "top-right");
+
+                var homeBtn = new Home({
+                    view: view
+                });
+                // Add the home button to the top left corner of the view
+                view.ui.add(homeBtn, "top-left");
+
+                view.when(function () {
+                    // executeIdentifyTask() is called each time the view is clicked
+                    view.on("click", executeIdentifyTask);
+
+                    // Create identify task for the specified map service
+                    identifyTask = new IdentifyTask(mapServiceURL);
+
+                    // Set the parameters for the Identify
+                    params = new IdentifyParameters();
+                    params.tolerance = 10;
+                    params.layerIds = [1];
+                    params.layerOption = "top";
+                    params.width = view.width;
+                    params.height = view.height;
+                    params.returngeometry = true;
+                });
+
+                function CreaBufferCircolare(inputJSON, colore) {
+
+                    var objJSONBuffer = JSON.parse(JSON.stringify(inputJSON));
+
+                    var poligono = new Polygon({
+                        hasZ: false,
+                        hasM: false,
+                        rings: objJSONBuffer.rings,
+                        spatialReference: objJSONBuffer.spatialReference
+                    });
+
+                    bufferGraphic = new Graphic({
+                        geometry: poligono,
+                        symbol: {
+                            type: "simple-fill", // autocasts as new SimpleFillSymbol()
+                            outline: {
+                                width: 1.5,
+                                color: colore //[255, 128, 0, 0.5]
+                            },
+                            style: "none"
+                        }
+                    });
+
+                        view.graphics.add(bufferGraphic);
+                };
+
+                // Executes each time the view is clicked
+                function executeIdentifyTask(event) {
+                    // Set the geometry to the location of the view click
+                    params.geometry = event.mapPoint;
+                    params.mapExtent = view.extent;
+
+                    // This function returns a promise that resolves to an array of features
+                    // A custom popupTemplate is set for each feature based on the layer it
+                    // originates from
+                    identifyTask
+                        .execute(params)
+                        .then(function (response) {
+                            var results = response.results;
+
+                            if (results.length == 1) {
+                                return results.map(function (result) {
+                                    var feature = result.feature;
+                                    var layerName = result.layerName;
+
+                                    feature.attributes.layerName = layerName;
+                                    if (layerName === "Filiari Bancarie") {
+                                        OID = feature.attributes.OBJECTID;
+                                        console.log("ObjectID: " + OID);
+
+                                        // Parte dedicata al richiamo della SOE:
+                                        // Define the 'options' for the request
+                                        var options = {
+                                            query: {
+                                                'OBJECTID': OID,
+                                                'bufferCerchio1': buffer1,
+                                                'bufferCerchio2': buffer2,
+                                                'bufferCerchio3': buffer3,
+                                                'f': "json"
+                                            },
+                                            //callbackParamName: "callback",
+                                            responseType: "json"
+                                        };
+
+                                        console.log(options);
+
+                                        esriRequest(SOEBufferURL, options).then(function (response) {
+                                            resultsLayer.removeAll();
+
+                                            var interno = response.data.interno;
+                                            AggiungiClientiInMappa(interno, 10, "diamond", "red");
+
+                                            var centrale = response.data.centrale;
+                                            AggiungiClientiInMappa(centrale, 10, "square", "blue");
+
+                                            var superiore = response.data.superiore;
+                                            AggiungiClientiInMappa(superiore, 10, "triangle", "green");
+
+                                            // Mi occupo di disegnare i Cerchi di Buffer!
+                                            view.graphics.removeAll();
+                                            var poligono1 = response.data.geomBuffer[0];
+                                            CreaBufferCircolare(poligono1, "red");
+
+                                            var poligono2 = response.data.geomBuffer[1];
+                                            CreaBufferCircolare(poligono2, "blue");
+
+                                            var poligono3 = response.data.geomBuffer[2];
+                                            CreaBufferCircolare(poligono3, "green");
+
+                                        });
+                                    }
+                                });
+                            }
+                            else if (results.length > 0) {
+                                alert("Trovati molteplici punti!");
+                            };
+
+                        });
+                };
+
+
+            view.ui.add("paneDiv", "top-right");
+            document.getElementById("btnQuery").addEventListener("click", getTrack);
+
+            // Scopo di questa funzione consiste nel aggiornare i valori dei buffer concentrici
+            function getTrack() {
+                var txtName = document.getElementById('txtNameBuffer1');
+                if (txtName.value != "") {
+                    buffer1 = txtName.value;
+                };
+
+                var txtName2 = document.getElementById('txtNameBuffer2');
+                if (txtName2.value != "") {
+                    buffer2 = txtName2.value;
+                };
+
+                var txtName3 = document.getElementById('txtNameBuffer3');
+                if (txtName3.value != "") {
+                    buffer3 = txtName3.value;
+                };
+
+                alert(buffer1 + ", " + buffer2 + ", " + buffer3);
+                };
+
+                function AggiungiClientiInMappa(inputJSON, dimensione, stile, colore) {
+
+                    var objJSONBuffer = JSON.parse(JSON.stringify(inputJSON));
+
+                    var featureSet = FeatureSet.fromJSON(objJSONBuffer);
+
+                    var lista = featureSet.features;
+
+                    var features = lista.map(function (graphic) {
+                        graphic.symbol = {
+                            type: "simple-marker", // autocasts as new SimpleMarkerSymbol()
+                            style: stile,
+                            size: dimensione,
+                            color: colore
+                        };
+                        return graphic;
+                    });
+
+                    resultsLayer.addMany(features);
+
+                };
+
+                // Mi occupo della parte legata al widget del righello
+                view.ui.add("topbar", "top-left");
+
+                document
+                    .getElementById("distanceButton")
+                    .addEventListener("click", function () {
+                        setActiveWidget(null);
+                        if (!this.classList.contains("active")) {
+                            setActiveWidget("distance");
+                        } else {
+                            setActiveButton(null);
+                        }
+                    });
+
+                document
+                    .getElementById("areaButton")
+                    .addEventListener("click", function () {
+                        setActiveWidget(null);
+                        if (!this.classList.contains("active")) {
+                            setActiveWidget("area");
+                        } else {
+                            setActiveButton(null);
+                        }
+                    });
+
+                function setActiveWidget(type) {
+                    switch (type) {
+                        case "distance":
+                            activeWidget = new DistanceMeasurement2D({
+                                view: view
+                            });
+
+                            // skip the initial 'new measurement' button
+                            activeWidget.viewModel.newMeasurement();
+
+                            view.ui.add(activeWidget, "top-right");
+                            setActiveButton(document.getElementById("distanceButton"));
+                            break;
+                        case "area":
+                            activeWidget = new AreaMeasurement2D({
+                                view: view
+                            });
+
+                            // skip the initial 'new measurement' button
+                            activeWidget.viewModel.newMeasurement();
+
+                            view.ui.add(activeWidget, "top-right");
+                            setActiveButton(document.getElementById("areaButton"));
+                            break;
+                        case null:
+                            if (activeWidget) {
+                                view.ui.remove(activeWidget);
+                                activeWidget.destroy();
+                                activeWidget = null;
+                            }
+                            break;
+                    }
+                };
+
+                function setActiveButton(selectedButton) {
+                    // focus the view to activate keyboard shortcuts for sketching
+                    view.focus();
+                    var elements = document.getElementsByClassName("active");
+                    for (var i = 0; i < elements.length; i++) {
+                        elements[i].classList.remove("active");
+                    }
+                    if (selectedButton) {
+                        selectedButton.classList.add("active");
+                    }
+                };
+
+                sketch.on("delete", function (event) {
+                    resultsLayer.removeAll();
+                });
+
+                // Aggancio l'evento al termire del disegno skacth
+                sketch.on("create", function (event) {
+                    if (event.state === "complete") {
+                        InserisciPuntiSketch(event);
+                    }
+                });
+
+                //sketch.on("update", function (event) {
+                //    InserisciPuntiSketch(event);
+                //});
+
+                function InserisciPuntiSketch(event) {
+                    var geomSkatch = event.graphic.geometry;
+                    var JSONGeomSkactch = JSON.stringify(geomSkatch.toJSON(geomSkatch));
+                    console.log(geomSkatch);
+
+                    // Parte dedicata al richiamo della SOE:
+                    // Define the 'options' for the request
+                    var options = {
+                        query: {
+                            'geomSketch': JSONGeomSkactch,
+                            'f': "json"
+                        },
+                        //callbackParamName: "callback",
+                        responseType: "json"
+                    };
+
+                    console.log(options);
+
+                    esriRequest(SOESketchURL, options).then(function (response) {
+                        resultsLayer.removeAll();
+
+                        if (response.data.hasError == true) {
+                            alert(response.data.errorDescription)
+                        }
+                        else {
+                            var interno = response.data.clientiInterno;
+
+                            if (interno.features.length == 0) {
+                                alert("Nessun cliente nell'area selezionata!")
+                            }
+                            else {
+                                AggiungiClientiInMappa(interno, 12, "triangle", "purple");
+                            }
+                        };
+                    });
+                };
+
+        });
+    </script>
+</head>
+
+<body>
+    <div id="viewDiv"></div>
+
+    <div id="paneDiv" class="esri-widget">
+        <div>
+            <h2>Valori dei buffer</h2>
+            <input type='text' id='txtNameBuffer1' placeholder='2500' />
+            <br />
+            <br />
+            <input type='text' id='txtNameBuffer2' placeholder='3500' />
+            <br />
+            <br />
+            <input type='text' id='txtNameBuffer3' placeholder='5000' />
+            <br />
+            <br />
+            <button class="esri-widget" id="btnQuery">Aggiorna valori!</button> <br /><br />
+            <span id='results'></span>
+        </div>
+    </div>
+
+    <div id="topbar">
+        <button class="action-button esri-icon-measure-line"
+                id="distanceButton"
+                type="button"
+                title="Measure distance between two or more points"></button>
+        <button class="action-button esri-icon-measure-area"
+                id="areaButton"
+                type="button"
+                title="Measure area"></button>
+    </div>
+
+</body>
+</html>
