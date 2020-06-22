@@ -1,16 +1,4 @@
-﻿// Copyright 2018 ESRI
-// 
-// All rights reserved under the copyright laws of the United States
-// and applicable international laws, treaties, and conventions.
-// 
-// You may freely redistribute and use this sample code, with or
-// without modification, provided you include the original copyright
-// notice and use restrictions.
-// 
-// See the use restrictions at <your Enterprise SDK install location>/userestrictions.txt.
-// 
-
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
